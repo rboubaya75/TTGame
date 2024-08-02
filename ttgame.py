@@ -13,6 +13,10 @@ POWERUP_WIDTH = 30
 POWERUP_HEIGHT = 30
 POWERUP_AREA_MARGIN = 50  # Margin from the edges of the screen
 
+# Initialize Pygame
+pygame.init()
+pygame.font.init()
+
 # Paddle class
 class Paddle:
     def __init__(self, x, y, image_path, width=50, height=100):
@@ -64,7 +68,7 @@ class Paddle:
 
     def apply_powerup(self, effect):
         if effect == 'speed':
-            self.vel *= 2
+            self.vel *= 5
             self.powerup_effect = 'speed'
             self.powerup_end_time = None  # Power-up lasts until point is scored
             print(f"Speed power-up applied: Velocity is now {self.vel}")
@@ -83,7 +87,7 @@ class Paddle:
 
     def reset_powerup(self):
         if self.powerup_effect == 'speed':
-            self.vel = 5  # Reset velocity to normal
+            self.vel = 2 # Reset velocity to normal
             print("Speed power-up reset")
         elif self.powerup_effect == 'size':
             self.width = self.original_width
@@ -119,8 +123,10 @@ class Ball:
 
         if self.rect.colliderect(paddle_left.rect):
             self.x_vel *= -1
+            pygame.mixer.Sound('assets/sounds/hit.wav').play()
         elif self.rect.colliderect(paddle_right.rect):
             self.x_vel *= -1
+            pygame.mixer.Sound('assets/sounds/hit.wav').play()
 
 # PowerUp class
 class PowerUp:
@@ -159,7 +165,7 @@ class PowerUp:
 
 # Game class
 class Game:
-    def __init__(self, screen, clock, multiplayer=False):
+    def __init__(self, screen, clock, multiplayer=False, difficulty='amateur'):
         self.screen = screen
         self.clock = clock
         self.running = True
@@ -178,6 +184,7 @@ class Game:
             self.ai = self.paddle_right  # Using paddle_right as AI
 
         self.multiplayer = multiplayer
+        self.difficulty = difficulty
         self.player1_score = 0
         self.player2_score = 0
         self.player1_sets = 0
@@ -204,6 +211,12 @@ class Game:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_p:
                     self.paused = not self.paused
+                elif event.key == pygame.K_ESCAPE:
+                    if self.paused:
+                        self.paused = False
+                    else:
+                        self.running = False  # Quit the game
+
             self.paddle_left.handle_event(event, player=1)
             if self.multiplayer:
                 self.paddle_right.handle_event(event, player=2)
@@ -226,24 +239,25 @@ class Game:
             self.reset_ball()
             self.paddle_left.reset_powerup()
             self.paddle_right.reset_powerup()
-            self.powerups.clear()  # Clear all power-ups when a point is scored
+            self.powerups.clear()
 
-        elif self.ball.x + self.ball.radius >= WIDTH:
+        if self.ball.x + self.ball.radius >= WIDTH:
             self.player1_score += 1
             self.check_set_winner()
             self.reset_ball()
             self.paddle_left.reset_powerup()
             self.paddle_right.reset_powerup()
-            self.powerups.clear()  # Clear all power-ups when a point is scored
+            self.powerups.clear()
 
         self.paddle_left.update()
         self.paddle_right.update()
 
     def ai_move(self):
+        speed = {'amateur': 3, 'professional': 7 }.get(self.difficulty, 3)
         if self.ball.y < self.paddle_right.y:
-            self.paddle_right.y -= 5
+            self.paddle_right.y -= speed
         elif self.ball.y > self.paddle_right.y:
-            self.paddle_right.y += 5
+            self.paddle_right.y += speed
 
         if self.paddle_right.y < self.paddle_right.height // 2:
             self.paddle_right.y = self.paddle_right.height // 2
@@ -259,7 +273,7 @@ class Game:
             self.reset_scores()
 
         if self.player1_sets >= 3 or self.player2_sets >= 3:
-            self.running = False  # End the game
+            self.running = False
 
     def reset_scores(self):
         self.player1_score = 0
@@ -277,8 +291,7 @@ class Game:
             if powerup.y > HEIGHT:
                 self.powerups.remove(powerup)
 
-        # Periodically spawn a new power-up
-        if pygame.time.get_ticks() - self.powerup_timer > 10000:  # Spawn every 10 seconds
+        if pygame.time.get_ticks() - self.powerup_timer > 10000:
             self.spawn_powerup()
             self.powerup_timer = pygame.time.get_ticks()
 
@@ -306,6 +319,8 @@ class Game:
         self.ball.draw(self.screen)
         self.draw_scores()
         self.draw_powerups()
+        if self.paused:
+            self.draw_pause_menu()
         pygame.display.flip()
 
     def draw_scores(self):
@@ -323,15 +338,108 @@ class Game:
         for powerup in self.powerups:
             powerup.draw(self.screen)
 
+    def draw_pause_menu(self):
+        font = pygame.font.Font(None, 74)
+        text = font.render("PAUSED", True, WHITE)
+        self.screen.blit(text, (WIDTH // 2 - text.get_width() // 2, HEIGHT // 2 - text.get_height() // 2 - 60))
+
+        font = pygame.font.Font(None, 50)
+        options = ["Resume", "Main Menu"]
+        for i, option in enumerate(options):
+            color = WHITE
+            text = font.render(option, True, color)
+            self.screen.blit(text, (WIDTH // 2 - text.get_width() // 2, HEIGHT // 2 - text.get_height() // 2 + i * 40))
+
+    def handle_pause_menu_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_UP:
+                self.paused_selection = (self.paused_selection - 1) % 2
+            elif event.key == pygame.K_DOWN:
+                self.paused_selection = (self.paused_selection + 1) % 2
+            elif event.key == pygame.K_RETURN:
+                if self.paused_selection == 0:  # Resume
+                    self.paused = False
+                elif self.paused_selection == 1:  # Main Menu
+                    self.running = False
+
+# Menu class
+class Menu:
+    def __init__(self, screen):
+        self.screen = screen
+        self.font = pygame.font.Font(None, 74)
+        self.small_font = pygame.font.Font(None, 50)
+        self.current_selection = 0
+        self.menu_options = ['Single Player', 'Multiplayer', 'Quit']
+        self.difficulty_levels = ['amateur', 'professional']
+        self.current_difficulty = 0  # Default to 'amateur'
+        self.mode_selection = None  # Keeps track of whether we are in mode selection or difficulty selection
+
+    def draw(self):
+        self.screen.fill(BLACK)
+        title_font = pygame.font.Font(None, 100)
+        title_text = title_font.render("PING PANG", True, WHITE)
+        self.screen.blit(title_text, (WIDTH // 2 - title_text.get_width() // 2, HEIGHT // 2 - title_text.get_height() // 2 - 150))
+
+        if self.mode_selection is None:
+            for i, option in enumerate(self.menu_options):
+                color = WHITE if i == self.current_selection else (100, 100, 100)
+                text = self.small_font.render(option, True, color)
+                self.screen.blit(text, (WIDTH // 2 - text.get_width() // 2, HEIGHT // 2 - text.get_height() // 2 + i * 80))
+        elif self.mode_selection == 'difficulty':
+            difficulty_text = self.small_font.render(f"Difficulty: {self.difficulty_levels[self.current_difficulty]}", True, WHITE)
+            self.screen.blit(difficulty_text, (WIDTH // 2 - difficulty_text.get_width() // 2, HEIGHT // 2 + 80))
+        pygame.display.flip()
+
+    def handle_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_DOWN:
+                if self.mode_selection is None:
+                    self.current_selection = (self.current_selection + 1) % len(self.menu_options)
+                elif self.mode_selection == 'difficulty':
+                    self.current_difficulty = (self.current_difficulty + 1) % len(self.difficulty_levels)
+            elif event.key == pygame.K_UP:
+                if self.mode_selection is None:
+                    self.current_selection = (self.current_selection - 1) % len(self.menu_options)
+                elif self.mode_selection == 'difficulty':
+                    self.current_difficulty = (self.current_difficulty - 1) % len(self.difficulty_levels)
+            elif event.key == pygame.K_RETURN:
+                self.select_option()
+            elif event.key == pygame.K_ESCAPE:
+                if self.mode_selection is not None:
+                    self.mode_selection = None  # Go back to main menu
+
+    def select_option(self):
+        if self.mode_selection is None:
+            if self.current_selection == 0:  # Single Player
+                self.mode_selection = 'difficulty'
+            elif self.current_selection == 1:  # Multiplayer
+                self.mode_selection = 'difficulty'
+            elif self.current_selection == 2:  # Quit
+                pygame.quit()
+                sys.exit()
+        elif self.mode_selection == 'difficulty':
+            difficulty = self.difficulty_levels[self.current_difficulty]
+            multiplayer = self.current_selection == 1
+            game = Game(self.screen, pygame.time.Clock(), multiplayer, difficulty)
+            game.run()
+            self.mode_selection = None
+            self.current_selection = 0
+
 # Main function
 def main():
-    pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     clock = pygame.time.Clock()
-    game = Game(screen, clock, multiplayer=False)
-    game.run()
-    pygame.quit()
-    sys.exit()
+    menu = Menu(screen)
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            menu.handle_event(event)
+        
+        menu.draw()
+        clock.tick(FPS)
 
 if __name__ == '__main__':
     main()
