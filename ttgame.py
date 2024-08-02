@@ -13,12 +13,6 @@ POWERUP_WIDTH = 30
 POWERUP_HEIGHT = 30
 POWERUP_AREA_MARGIN = 50  # Margin from the edges of the screen
 
-# Initialize Pygame and load sounds
-pygame.mixer.init()
-hit_sound = pygame.mixer.Sound('assets/sounds/paddle.wav')
-score_sound = pygame.mixer.Sound('assets/sounds/score.wav')
-powerup_sound = pygame.mixer.Sound('assets/sounds/powerup.wav')
-
 # Paddle class
 class Paddle:
     def __init__(self, x, y, image_path, width=50, height=100):
@@ -28,6 +22,7 @@ class Paddle:
         self.original_height = height
         self.width = width
         self.height = height
+        self.image_path = image_path
         self.image = pygame.image.load(image_path).convert_alpha()
         self.image = pygame.transform.scale(self.image, (self.width, self.height))
         self.rect = self.image.get_rect(center=(self.x, self.y))
@@ -71,27 +66,31 @@ class Paddle:
         if effect == 'speed':
             self.vel *= 2
             self.powerup_effect = 'speed'
-            self.powerup_end_time = pygame.time.get_ticks() + 5000  # Power-up lasts for 5 seconds
+            self.powerup_end_time = None  # Power-up lasts until point is scored
+            print(f"Speed power-up applied: Velocity is now {self.vel}")
         elif effect == 'size':
             self.width = int(self.original_width * 2)
             self.height = int(self.original_height * 2)
-            self.image = pygame.transform.scale(pygame.image.load('assets/images/paddle.jpg').convert_alpha(), (self.width, self.height))
+            self.image = pygame.transform.scale(pygame.image.load(self.image_path).convert_alpha(), (self.width, self.height))
             self.rect = self.image.get_rect(center=(self.x, self.y))
             self.powerup_effect = 'size'
-            self.powerup_end_time = pygame.time.get_ticks() + 10000  # Power-up lasts for 10 seconds
+            self.powerup_end_time = None  # Power-up lasts until point is scored
+            print("Size power-up applied")
 
     def update(self):
-        if self.powerup_effect and pygame.time.get_ticks() > self.powerup_end_time:
-            self.reset_powerup()
+        # No need to check for powerup_end_time as power-ups last until point is scored
+        pass
 
     def reset_powerup(self):
         if self.powerup_effect == 'speed':
-            self.vel /= 2
+            self.vel = 5  # Reset velocity to normal
+            print("Speed power-up reset")
         elif self.powerup_effect == 'size':
             self.width = self.original_width
             self.height = self.original_height
-            self.image = pygame.transform.scale(pygame.image.load('assets/images/paddle.jpg').convert_alpha(), (self.width, self.height))
+            self.image = pygame.transform.scale(pygame.image.load(self.image_path).convert_alpha(), (self.width, self.height))
             self.rect = self.image.get_rect(center=(self.x, self.y))
+            print("Size power-up reset")
         self.powerup_effect = None
 
 # Ball class
@@ -118,15 +117,10 @@ class Ball:
         if self.y - self.radius <= 0 or self.y + self.radius >= height:
             self.y_vel *= -1
 
-        if self.rect.colliderect(paddle_left.rect) or self.rect.colliderect(paddle_right.rect):
+        if self.rect.colliderect(paddle_left.rect):
             self.x_vel *= -1
-            hit_sound.play()  # Play hit sound on paddle collision
-
-        # Ball out of bounds
-        if self.x - self.radius <= 0 or self.x + self.radius >= width:
-            return True  # Indicates that the ball is out of bounds
-
-        return False
+        elif self.rect.colliderect(paddle_right.rect):
+            self.x_vel *= -1
 
 # PowerUp class
 class PowerUp:
@@ -162,178 +156,182 @@ class PowerUp:
 
     def apply(self, paddle):
         paddle.apply_powerup(self.effect)
-        powerup_sound.play()  # Play power-up sound
 
 # Game class
 class Game:
-    def __init__(self, screen, clock, multiplayer=False, ai=False, ai_difficulty='easy'):
+    def __init__(self, screen, clock, multiplayer=False):
         self.screen = screen
         self.clock = clock
         self.running = True
         self.paused = False
-        self.powerups = []
-        self.powerup_timer = pygame.time.get_ticks()
-        self.server = 1
-        self.serve_count = 0
+
+        # Load images
+        self.table_image = pygame.image.load('assets/images/table.png').convert()
+        self.table_image = pygame.transform.scale(self.table_image, (WIDTH, HEIGHT))
+
+        self.paddle_left = Paddle(30, HEIGHT // 2, 'assets/images/paddle.png')
+        self.paddle_right = Paddle(WIDTH - 30, HEIGHT // 2, 'assets/images/paddle.png')
+        self.ball = Ball(WIDTH // 2, HEIGHT // 2, 'assets/images/ball.png')
+
+        self.ai = None
+        if not multiplayer:
+            self.ai = self.paddle_right  # Using paddle_right as AI
+
+        self.multiplayer = multiplayer
         self.player1_score = 0
         self.player2_score = 0
         self.player1_sets = 0
         self.player2_sets = 0
+        self.serve_count = 0
+        self.server = 1
 
-        # Initialize paddles and ball
-        self.paddle_left = Paddle(50, HEIGHT // 2, 'assets/images/paddle.jpg')
-        self.paddle_right = Paddle(WIDTH - 50, HEIGHT // 2, 'assets/images/paddle.jpg')
-        self.ball = Ball(WIDTH // 2, HEIGHT // 2, 'assets/images/ball.jpg')
-
-        if ai:
-            self.ai_paddle = Paddle(WIDTH - 50, HEIGHT // 2, 'assets/images/paddle.jpg')
-        else:
-            self.ai_paddle = None
-
-        self.table_image = pygame.Surface((WIDTH, HEIGHT))
-        self.table_image.fill(TABLE_COLOR)
-        self.clock.tick(FPS)
-
-        self.multiplayer = multiplayer
-        self.ai = ai
-        self.ai_difficulty = ai_difficulty
+        self.powerups = []
+        self.powerup_timer = pygame.time.get_ticks()  # Timer to control power-up spawning
+        self.powerup_spawned = False
 
     def run(self):
         while self.running:
             self.handle_events()
-
             if not self.paused:
                 self.update()
-                self.draw()
-
+            self.draw()
             self.clock.tick(FPS)
 
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.running = False
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_p:
-                self.paused = not self.paused
-
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_p:
+                    self.paused = not self.paused
             self.paddle_left.handle_event(event, player=1)
             if self.multiplayer:
                 self.paddle_right.handle_event(event, player=2)
 
     def update(self):
-        if self.serve_count >= 10:
-            self.server = 2 if self.server == 1 else 1
-            self.serve_count = 0
-
         self.ball.move()
-
-        # Ball collision with walls and paddles
-        if self.ball.check_collision(WIDTH, HEIGHT, self.paddle_left, self.paddle_right):
-            if self.ball.x - self.ball.radius <= 0:
-                self.player2_score += 1
-                self.serve_count += 1
-                self.reset_ball()
-                score_sound.play()
-            elif self.ball.x + self.ball.radius >= WIDTH:
-                self.player1_score += 1
-                self.serve_count += 1
-                self.reset_ball()
-                score_sound.play()
-
-        # AI movement
-        if self.ai_paddle:
-            self.control_ai()
-
+        self.ball.check_collision(WIDTH, HEIGHT, self.paddle_left, self.paddle_right)
         self.paddle_left.move()
         self.paddle_right.move()
-        if self.ai_paddle:
-            self.ai_paddle.move()
 
-        # Handle power-ups
-        current_time = pygame.time.get_ticks()
-        if current_time - self.powerup_timer > 10000:  # Generate a new power-up every 10 seconds
-            self.generate_powerup()
-            self.powerup_timer = current_time
+        if not self.multiplayer and self.ai:
+            self.ai_move()
 
-        for powerup in self.powerups:
-            powerup.move()
-            if self.ball.rect.colliderect(powerup.rect):
-                powerup.apply(self.paddle_left if self.server == 1 else self.paddle_right)
-                self.powerups.remove(powerup)
-                powerup_sound.play()
-            if self.paddle_left.rect.colliderect(powerup.rect) or self.paddle_right.rect.colliderect(powerup.rect):
-                powerup.apply(self.paddle_left if self.paddle_left.rect.colliderect(powerup.rect) else self.paddle_right)
-                self.powerups.remove(powerup)
-                powerup_sound.play()
+        self.update_powerups()
+        self.check_powerup_collisions()
+
+        if self.ball.x - self.ball.radius <= 0:
+            self.player2_score += 1
+            self.check_set_winner()
+            self.reset_ball()
+            self.paddle_left.reset_powerup()
+            self.paddle_right.reset_powerup()
+            self.powerups.clear()  # Clear all power-ups when a point is scored
+
+        elif self.ball.x + self.ball.radius >= WIDTH:
+            self.player1_score += 1
+            self.check_set_winner()
+            self.reset_ball()
+            self.paddle_left.reset_powerup()
+            self.paddle_right.reset_powerup()
+            self.powerups.clear()  # Clear all power-ups when a point is scored
 
         self.paddle_left.update()
         self.paddle_right.update()
 
-    def control_ai(self):
-        # AI difficulty adjustment
-        if self.ai_difficulty == 'easy':
-            speed = 5
-        elif self.ai_difficulty == 'hard':
-            speed = 7
-        else:
-            speed = 5
+    def ai_move(self):
+        if self.ball.y < self.paddle_right.y:
+            self.paddle_right.y -= 5
+        elif self.ball.y > self.paddle_right.y:
+            self.paddle_right.y += 5
 
-        # AI paddle movement
-        if self.ball.y < self.ai_paddle.y - self.ai_paddle.height // 2:
-            self.ai_paddle.vel = -speed
-        elif self.ball.y > self.ai_paddle.y + self.ai_paddle.height // 2:
-            self.ai_paddle.vel = speed
-        else:
-            self.ai_paddle.vel = 0
+        if self.paddle_right.y < self.paddle_right.height // 2:
+            self.paddle_right.y = self.paddle_right.height // 2
+        elif self.paddle_right.y > HEIGHT - self.paddle_right.height // 2:
+            self.paddle_right.y = HEIGHT - self.paddle_right.height // 2
+
+    def check_set_winner(self):
+        if self.player1_score >= 11 and self.player1_score > self.player2_score:
+            self.player1_sets += 1
+            self.reset_scores()
+        elif self.player2_score >= 11 and self.player2_score > self.player1_score:
+            self.player2_sets += 1
+            self.reset_scores()
+
+        if self.player1_sets >= 3 or self.player2_sets >= 3:
+            self.running = False  # End the game
+
+    def reset_scores(self):
+        self.player1_score = 0
+        self.player2_score = 0
 
     def reset_ball(self):
         self.ball.x = WIDTH // 2
         self.ball.y = HEIGHT // 2
-        self.ball.x_vel = 5 * random.choice([-1, 1])
-        self.ball.y_vel = 5 * random.choice([-1, 1])
+        self.ball.x_vel *= random.choice([-1, 1])
+        self.ball.y_vel *= random.choice([-1, 1])
 
-    def generate_powerup(self):
+    def update_powerups(self):
+        for powerup in self.powerups:
+            powerup.move()
+            if powerup.y > HEIGHT:
+                self.powerups.remove(powerup)
+
+        # Periodically spawn a new power-up
+        if pygame.time.get_ticks() - self.powerup_timer > 10000:  # Spawn every 10 seconds
+            self.spawn_powerup()
+            self.powerup_timer = pygame.time.get_ticks()
+
+    def spawn_powerup(self):
         x = random.randint(POWERUP_AREA_MARGIN + POWERUP_WIDTH // 2, WIDTH - POWERUP_AREA_MARGIN - POWERUP_WIDTH // 2)
-        y = random.randint(POWERUP_AREA_MARGIN + POWERUP_HEIGHT // 2, HEIGHT - POWERUP_AREA_MARGIN - POWERUP_HEIGHT // 2)
+        y = POWERUP_AREA_MARGIN
         effect = random.choice(['speed', 'size'])
         image_path = f'assets/images/{effect}_powerup.png'
-        self.powerups.append(PowerUp(x, y, image_path, effect))
+        powerup = PowerUp(x, y, image_path, effect)
+        self.powerups.append(powerup)
+
+    def check_powerup_collisions(self):
+        for powerup in self.powerups:
+            if powerup.rect.colliderect(self.paddle_left.rect):
+                powerup.apply(self.paddle_left)
+                self.powerups.remove(powerup)
+            elif powerup.rect.colliderect(self.paddle_right.rect):
+                powerup.apply(self.paddle_right)
+                self.powerups.remove(powerup)
 
     def draw(self):
         self.screen.blit(self.table_image, (0, 0))
         self.paddle_left.draw(self.screen)
         self.paddle_right.draw(self.screen)
-        if self.ai_paddle:
-            self.ai_paddle.draw(self.screen)
         self.ball.draw(self.screen)
+        self.draw_scores()
+        self.draw_powerups()
+        pygame.display.flip()
 
-        # Draw power-ups
+    def draw_scores(self):
+        font = pygame.font.Font(None, 74)
+        text = font.render(str(self.player1_score), True, WHITE)
+        self.screen.blit(text, (250, 10))
+        text = font.render(str(self.player2_score), True, WHITE)
+        self.screen.blit(text, (510, 10))
+
+        font = pygame.font.Font(None, 50)
+        text = font.render(f'Sets: {self.player1_sets} - {self.player2_sets}', True, WHITE)
+        self.screen.blit(text, (WIDTH // 2 - text.get_width() // 2, 50))
+
+    def draw_powerups(self):
         for powerup in self.powerups:
             powerup.draw(self.screen)
 
-        # Draw scores
-        font = pygame.font.Font(None, 36)
-        player1_score_text = font.render(f"Player 1: {self.player1_score}", True, WHITE)
-        player2_score_text = font.render(f"Player 2: {self.player2_score}", True, WHITE)
-        self.screen.blit(player1_score_text, (50, 20))
-        self.screen.blit(player2_score_text, (WIDTH - 150, 20))
-
-        pygame.display.flip()
-
+# Main function
 def main():
     pygame.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
-    pygame.display.set_caption('Pong Game')
     clock = pygame.time.Clock()
-
-    multiplayer = True  # Set to False for single player vs AI
-    ai = multiplayer and True
-    ai_difficulty = 'easy' if ai else 'hard'
-
-    game = Game(screen, clock, multiplayer=multiplayer, ai=ai, ai_difficulty=ai_difficulty)
+    game = Game(screen, clock, multiplayer=False)
     game.run()
-
     pygame.quit()
     sys.exit()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
